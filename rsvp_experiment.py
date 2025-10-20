@@ -27,6 +27,8 @@ import random
 import glob
 from datetime import datetime
 from pathlib import Path
+import time
+import threading
 from rsvp_hardware import create_hardware_manager, cleanup_hardware, ScreeningTools
 
 class RSVPExperiment:
@@ -49,10 +51,6 @@ class RSVPExperiment:
             'max_wait_response': 10.0,  # Maximum wait time for response
             'min_blank_duration': 1.25,
             'max_rand_blank': 0.5,
-            'min_lines_duration': 0.5,
-            'max_rand_lines': 0.2,
-            'line_thickness': 5,
-            'line_offset': 5,
             'daq_device': 'Dev1',  # DAQ device name
             'daq_port': 'port0',   # DAQ port name
             'enable_screening': False  # Enable screening tests
@@ -70,6 +68,13 @@ class RSVPExperiment:
         self.times = []
         self.responses = []
         self.trial_data = []
+        
+        # Timing control variables (matching MATLAB)
+        self.ifi = None  # Inter-frame interval
+        self.slack = None  # Slack time (1/3 of IFI)
+        self.wait_reset = 0.04  # Must be shorter than shortest ISI
+        self.value_reset = 0
+        self.tprev = None  # Previous time
         
         # Hardware components
         self.hardware = None
@@ -235,7 +240,14 @@ Appuyez sur BARRE D'ESPACE pour commencer.'''
         self.x_center = self.window_rect[0] / 2
         self.y_center = self.window_rect[1] / 2
         
+        # Calculate timing parameters (matching MATLAB)
+        self.ifi = self.window.monitorFramePeriod
+        self.slack = self.ifi / 3.0  # Slack time (1/3 of IFI)
+        
         print(f"Window created: {self.window_rect}")
+        print(f"Frame rate: {1/self.ifi:.1f} Hz")
+        print(f"Inter-frame interval: {self.ifi*1000:.2f} ms")
+        print(f"Slack time: {self.slack*1000:.2f} ms")
         
         # Initialize hardware
         self.hardware = create_hardware_manager(self.config)
@@ -329,70 +341,19 @@ Appuyez sur BARRE D'ESPACE pour commencer.'''
             # Select ISI for this sequence
             isi = random.choice(isi_values)
             
-            # Generate color changes
-            color_changes = self.generate_color_changes(seq_length, isi)
-            
             sequence_info = {
                 'sequence_number': seq_idx + 1,
                 'image_indices': selected_images,
-                'isi': isi,
-                'color_changes': color_changes,
-                'line_colors': self.generate_line_colors(color_changes)
+                'isi': isi
             }
             
             self.trial_structure.append(sequence_info)
         
         print(f"Generated {len(self.trial_structure)} sequences")
     
-    def generate_color_changes(self, seq_length, isi):
-        """Generate color change events for a sequence"""
-        # Approximate number of changes based on sequence duration
-        total_duration = seq_length * isi
-        target_changes = max(1, int(total_duration / 10))  # ~1 change per 10 seconds
-        
-        # Add some randomness
-        n_changes = target_changes + random.randint(-1, 2)
-        n_changes = max(1, min(n_changes, seq_length - 2))  # At least 1, at most seq_length-2
-        
-        # Select random positions for changes (not first or last image)
-        change_positions = random.sample(range(2, seq_length), n_changes)
-        change_positions.sort()
-        
-        color_changes = []
-        for pos in change_positions:
-            # Random time within the ISI for the change
-            change_time = random.uniform(isi * 0.25, isi * 0.75)
-            
-            color_changes.append({
-                'image_position': pos,
-                'change_time': change_time,
-                'new_color_top': random.choice(['red', 'green']),
-                'new_color_bottom': random.choice(['red', 'green'])
-            })
-        
-        return color_changes
-    
-    def generate_line_colors(self, color_changes):
-        """Generate the sequence of line colors"""
-        # Start with random colors
-        current_colors = {
-            'top': random.choice(['red', 'green']),
-            'bottom': random.choice(['red', 'green'])
-        }
-        
-        # Apply changes
-        line_colors = [current_colors.copy()]
-        
-        for change in color_changes:
-            # Update colors at change point
-            current_colors['top'] = change['new_color_top']
-            current_colors['bottom'] = change['new_color_bottom']
-            line_colors.append(current_colors.copy())
-        
-        return line_colors
     
     def check_for_response(self):
-        """Check for response from keyboard or gamepad"""
+        """Check for response from keyboard or gamepad (edge-triggered like MATLAB)"""
         response = None
         
         # Check keyboard
@@ -402,11 +363,31 @@ Appuyez sur BARRE D'ESPACE pour commencer.'''
         if 'space' in keys:
             return 'space'
         
-        # Check gamepad if available
+        # Check gamepad if available (edge-triggered like MATLAB)
         if self.gamepad and self.gamepad.connected:
-            # Check button 1 and 2 (similar to MATLAB version)
-            if self.gamepad.get_button_state(0) or self.gamepad.get_button_state(1):
+            # Check button 0 and 1 (similar to MATLAB version)
+            button_0_pressed = self.gamepad.get_button_state(0)
+            button_1_pressed = self.gamepad.get_button_state(1)
+            
+            # Only trigger on button press if not already pressed (edge-triggered)
+            if (button_0_pressed and not getattr(self, '_button_0_was_pressed', False)) or \
+               (button_1_pressed and not getattr(self, '_button_1_was_pressed', False)):
+                
+                # Debug: print which button was pressed
+                if button_0_pressed and not getattr(self, '_button_0_was_pressed', False):
+                    print(f"Button 0 (X) pressed")
+                if button_1_pressed and not getattr(self, '_button_1_was_pressed', False):
+                    print(f"Button 1 (A) pressed")
+                
+                # Update button state tracking
+                self._button_0_was_pressed = button_0_pressed
+                self._button_1_was_pressed = button_1_pressed
+                
                 return 'space'  # Treat gamepad buttons as space
+            
+            # Update button state tracking
+            self._button_0_was_pressed = button_0_pressed
+            self._button_1_was_pressed = button_1_pressed
         
         return None
     
@@ -475,190 +456,126 @@ Appuyez sur BARRE D'ESPACE pour commencer.'''
             
             core.wait(0.016)
     
-    def create_line_stimuli(self):
-        """Create the colored line stimuli"""
-        # Get image dimensions for line positioning
-        if self.image_textures:
-            sample_img = self.image_textures[0]
-            # Get the size of the image stimulus - handle numpy array properly
-            try:
-                img_size = sample_img.size
-                if img_size is not None and len(img_size) >= 2:
-                    img_width = float(img_size[0])
-                    img_height = float(img_size[1])
-                else:
-                    # Fallback to default values
-                    img_width = 400
-                    img_height = 300
-            except (AttributeError, TypeError, IndexError):
-                # If size attribute doesn't work as expected, use defaults
-                img_width = 400
-                img_height = 300
-                
-            img_top = img_height / 2
-            img_bottom = -img_height / 2
-        else:
-            img_width = 400
-            img_top = 200
-            img_bottom = -200
-        
-        offset = self.config['line_offset']
-        thickness = self.config['line_thickness']
-        
-        print(f"Creating lines: width={img_width}, top={img_top}, bottom={img_bottom}")
-        
-        # Top line
-        self.top_line = visual.Line(
-            win=self.window,
-            start=(-img_width/2, img_top + offset),
-            end=(img_width/2, img_top + offset),
-            lineWidth=thickness,
-            units='pix'
-        )
-        
-        # Bottom line
-        self.bottom_line = visual.Line(
-            win=self.window,
-            start=(-img_width/2, img_bottom - offset),
-            end=(img_width/2, img_bottom - offset),
-            lineWidth=thickness,
-            units='pix'
-        )
     
     def run_sequence(self, sequence_info):
-        """Run a single RSVP sequence"""
+        """Run a single RSVP sequence (simplified - images only)"""
         seq_num = sequence_info['sequence_number']
         image_indices = sequence_info['image_indices']
         isi = sequence_info['isi']
-        color_changes = sequence_info['color_changes']
-        line_colors = sequence_info['line_colors']
         
         print(f"Running sequence {seq_num} with {len(image_indices)} images, ISI={isi}s")
         
         # Initialize response tracking
         sequence_responses = []
-        change_detected = {change['image_position']: False for change in color_changes}
+        k = 0  # Time index counter (matching MATLAB)
         
-        # Initial blank screen with lines
+        # Initialize button state tracking for edge-triggered detection
+        self._button_0_was_pressed = False
+        self._button_1_was_pressed = False
+        
+        # Random timing parameters (matching MATLAB)
+        min_blank = self.config['min_blank_duration']
+        max_rand_blank = self.config['max_rand_blank']
+        
+        randTime_blank = min_blank + max_rand_blank * random.random()
+        
+        # Initialize timing
+        self.times = []
+        sequence_clock = core.Clock()  # Use PsychoPy clock for timing
+        
+        # Initial blank screen
         self.window.clearBuffer()
-        current_color_idx = 0
-        self.update_line_colors(line_colors[current_color_idx])
-        self.top_line.draw()
-        self.bottom_line.draw()
+        times_k = self.window.flip()
+        self.times.append(times_k)
+        k += 1
         
-        # Random initial blank duration
-        blank_duration = (self.config['min_blank_duration'] + 
-                         random.uniform(0, self.config['max_rand_blank']))
-        
-        sequence_start_time = self.window.flip()
-        
-        # Send experiment signature pulses at start
+        # Send initial blank pulse
         if self.pulse_gen and self.pulse_gen.available:
-            self.pulse_gen.send_signature_pulses()
+            self.pulse_gen.send_pulse(self.pulse_gen.pulse_codes['blank_on'])
+            time.sleep(self.wait_reset)
+            self.pulse_gen.send_pulse(self.pulse_gen.pulse_codes['value_reset'])
         
-        core.wait(blank_duration)
+        self.tprev = times_k
+        k += 1
         
         # Present image sequence
         for img_idx, image_index in enumerate(image_indices):
-            img_start_time = core.Clock()
-            
-            # Check for color change at this position
-            color_change_time = None
-            for change in color_changes:
-                if change['image_position'] == img_idx + 1:  # 1-indexed
-                    color_change_time = change['change_time']
-                    break
-            
-            # Draw image and lines
+            # Draw image only
             self.window.clearBuffer()
             self.image_textures[image_index].draw()
-            self.update_line_colors(line_colors[current_color_idx])
-            self.top_line.draw()
-            self.bottom_line.draw()
             
-            img_onset_time = self.window.flip()
+            # Calculate flip time (matching MATLAB timing)
+            if img_idx == 0:
+                flip_time = self.tprev + randTime_blank - self.slack
+            else:
+                flip_time = self.tprev + isi - self.slack
+            
+            times_k = self.window.flip(flip_time)
+            self.times.append(times_k)
             
             # Send image onset pulse
             if self.pulse_gen and self.pulse_gen.available:
-                pulse_value = self.pulse_gen.pulse_codes['pic_onoff_1'][0] if img_idx % 2 == 0 else self.pulse_gen.pulse_codes['pic_onoff_2'][0]
-                self.pulse_gen.send_pulse(pulse_value)
-            
-            # Handle color change during ISI if needed
-            if color_change_time:
-                # Wait until color change time
-                while img_start_time.getTime() < color_change_time:
-                    # Check for responses using our unified method
-                    response = self.check_for_response()
-                    if response == 'space':
-                        rt = img_start_time.getTime()
-                        self.record_response(seq_num, img_idx, rt, True)
-                        sequence_responses.append({
-                            'sequence': seq_num,
-                            'image_position': img_idx + 1,
-                            'reaction_time': rt,
-                            'correct': True
-                        })
-                        
-                        # Send response pulse
-                        if self.pulse_gen and self.pulse_gen.available:
-                            self.pulse_gen.send_pulse(self.pulse_gen.pulse_codes['resp_onset'])
-                            
-                    elif response == 'escape':
-                        return False
-                    
-                    core.wait(0.001)
+                if img_idx == 0:
+                    pulse_value = self.pulse_gen.pulse_codes['pic_onoff_2'][0]
+                else:
+                    pulse_value = self.pulse_gen.pulse_codes['pic_onoff_1'][0] if img_idx % 2 == 0 else self.pulse_gen.pulse_codes['pic_onoff_2'][0]
                 
-                # Execute color change
-                current_color_idx += 1
-                if current_color_idx < len(line_colors):
-                    self.window.clearBuffer()
-                    self.image_textures[image_index].draw()
-                    self.update_line_colors(line_colors[current_color_idx])
-                    self.top_line.draw()
-                    self.bottom_line.draw()
-                    change_onset_time = self.window.flip()
-                    
-                    print(f"Color change at image {img_idx + 1}, time {color_change_time:.3f}s")
+                self.pulse_gen.send_pulse(pulse_value)
+                time.sleep(self.wait_reset)
+                self.pulse_gen.send_pulse(self.pulse_gen.pulse_codes['value_reset'])
             
-            # Wait for remaining ISI time
-            while img_start_time.getTime() < isi:
-                # Check for responses
-                keys = event.getKeys(timeStamped=img_start_time)
-                for key, rt in keys:
-                    if key == 'space':
-                        # Determine if this was a correct response
-                        correct = any(
-                            abs(rt - change['change_time']) < 1.0  # Within 1 second of change
-                            for change in color_changes
-                            if change['image_position'] <= img_idx + 1
-                        )
-                        
-                        self.record_response(seq_num, img_idx, rt, correct)
-                        sequence_responses.append({
-                            'sequence': seq_num,
-                            'image_position': img_idx + 1,
-                            'reaction_time': rt,
-                            'correct': correct
-                        })
-                    elif key == 'escape':
-                        return False
+            self.tprev = times_k
+            k += 1
+            
+            # Wait for ISI time and check for responses
+            isi_start_time = sequence_clock.getTime()
+            while (sequence_clock.getTime() - isi_start_time) < isi:
+                response = self.check_for_response()
+                if response == 'space':
+                    rt = sequence_clock.getTime() - isi_start_time
+                    self.record_response(seq_num, img_idx, rt, True)
+                    sequence_responses.append({
+                        'sequence': seq_num,
+                        'image_position': img_idx + 1,
+                        'reaction_time': rt,
+                        'correct': True
+                    })
+                    
+                    # Send response pulse
+                    if self.pulse_gen and self.pulse_gen.available:
+                        self.pulse_gen.send_pulse(self.pulse_gen.pulse_codes['resp_offset'])
+                        time.sleep(self.wait_reset)
+                        self.pulse_gen.send_pulse(self.pulse_gen.pulse_codes['value_reset'])
+                    
+                    print(f"Response recorded: Button press at image {img_idx + 1}, RT={rt:.3f}s")
+                    
+                elif response == 'escape':
+                    return False
                 
                 core.wait(0.001)
         
         # Final blank screen
         self.window.clearBuffer()
-        self.window.flip()
+        times_k = self.window.flip(self.tprev + isi - self.slack)
+        self.times.append(times_k)
+        
+        # Send final blank pulse
+        if self.pulse_gen and self.pulse_gen.available:
+            self.pulse_gen.send_pulse(self.pulse_gen.pulse_codes['blank_on'])
+            time.sleep(self.wait_reset)
+            self.pulse_gen.send_pulse(self.pulse_gen.pulse_codes['value_reset'])
+        
+        self.tprev = times_k
+        k += 1
+        
+        # Wait for final blank duration
+        final_wait_time = randTime_blank
+        if final_wait_time > 0:
+            core.wait(final_wait_time)
         
         print(f"Sequence {seq_num} completed. Responses: {len(sequence_responses)}")
         return True
     
-    def update_line_colors(self, colors):
-        """Update the colors of the line stimuli"""
-        top_color = self.colors[colors['top']]
-        bottom_color = self.colors[colors['bottom']]
-        
-        self.top_line.lineColor = [c/255.0 for c in top_color]  # Convert to PsychoPy range
-        self.bottom_line.lineColor = [c/255.0 for c in bottom_color]
     
     def record_response(self, sequence, image_position, reaction_time, correct):
         """Record a participant response"""
@@ -747,7 +664,6 @@ Appuyez sur BARRE D'ESPACE pour commencer.'''
             self.setup_window()
             self.load_images()
             self.generate_trial_structure()
-            self.create_line_stimuli()
             
             # Run screening if enabled
             if self.config.get('enable_screening', False):
@@ -758,6 +674,11 @@ Appuyez sur BARRE D'ESPACE pour commencer.'''
             if not self.show_instructions():
                 print("Experiment cancelled during instructions")
                 return False
+            
+            # Send experiment signature pulses at start (matching MATLAB)
+            if self.pulse_gen and self.pulse_gen.available:
+                print("Sending experiment signature pulses...")
+                self.pulse_gen.send_signature_pulses()
             
             # Run sequences
             for sequence_info in self.trial_structure:

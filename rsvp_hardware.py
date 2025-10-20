@@ -9,7 +9,7 @@ This module provides hardware integration for the RSVP experiment including:
 
 Dependencies:
 - pygame (for gamepad support)
-- nidaqmx (for National Instruments DAQ - optional)
+- mcculw (for MCC USB-1208FS-Plus DAQ - optional)
 - psychopy
 """
 
@@ -19,14 +19,14 @@ import numpy as np
 from psychopy import core, event
 import warnings
 
-# Optional DAQ support
+# Optional DAQ support - MCC USB-1208FS-Plus
 try:
-    import nidaqmx
-    from nidaqmx.constants import LineGrouping
+    from mcculw import ul
+    from mcculw.enums import DigitalPortType, DigitalIODirection, InterfaceType
     DAQ_AVAILABLE = True
 except ImportError:
     DAQ_AVAILABLE = False
-    warnings.warn("nidaqmx not available. Pulse functionality will be disabled.")
+    warnings.warn("mcculw not available. Pulse functionality will be disabled.")
 
 class GamepadController:
     """Gamepad/Joystick controller for RSVP experiment"""
@@ -159,76 +159,74 @@ class GamepadController:
         self.connected = False
 
 class PulseGenerator:
-    """DAQ pulse generator for EEG synchronization"""
+    """DAQ pulse generator for EEG synchronization - MCC USB-1208FS-Plus"""
     
-    def __init__(self, device_name="Dev1", port="port0"):
+    def __init__(self, device_name=None, port="FIRSTPORTA"):
         self.device_name = device_name
         self.port = port
-        self.task = None
+        self.board_num = 0  # Default board number for MCC devices
         self.available = DAQ_AVAILABLE
         
-        # Pulse codes from original MATLAB code
+        # Pulse codes from original MATLAB code (simplified - images only)
         self.pulse_codes = {
             'data_signature_on': 85,
             'data_signature_off': 84,
             'pic_onoff_1': [1, 5, 17],
             'pic_onoff_2': [3, 9, 33],
-            'bits_for_break': [65, 128],
-            'lines_onoff': 77,
             'blank_on': 69,
-            'lines_flip_blank': 103,
-            'lines_flip_pic': 133,
             'trial_on': 113,
-            'resp_onset': 79,
             'resp_offset': 81,
-            'wait_resp_on': 83,
             'value_reset': 0
         }
         
         self.wait_reset = 0.04  # Wait time after pulse
     
     def initialize(self):
-        """Initialize DAQ device"""
+        """Initialize MCC USB-1208FS-Plus DAQ device"""
         if not self.available:
             print("DAQ not available - pulse generation disabled")
             return False
         
         try:
-            # Create a digital output task
-            self.task = nidaqmx.Task()
+            # Initialize the Universal Library
+            ul.ignore_instacal()
             
-            # Add digital output channel
-            self.task.do_channels.add_do_chan(
-                f"{self.device_name}/{self.port}/line0:7",
-                line_grouping=LineGrouping.CHAN_PER_LINE
-            )
+            # Get the first available board (USB-1208FS-Plus)
+            board_list = ul.get_daq_device_inventory(InterfaceType.USB)
+            if not board_list:
+                print("No MCC DAQ devices found")
+                return False
             
-            # Start the task
-            self.task.start()
+            # Use board number 0 (default for InstaCal configuration)
+            # The device should be configured in InstaCal first
+            self.board_num = 0
+            self.config_first_detected_device(self.board_num)
+            # Configure digital port for output (matching MATLAB: DaqDConfigPort(dio,0,0))
+            # MATLAB: dio=board, 0=port A, 0=output direction
+            ul.d_config_port(self.board_num, DigitalPortType.FIRSTPORTA, DigitalIODirection.OUT)
             
-            print(f"DAQ initialized: {self.device_name}")
+            print(f"MCC DAQ initialized: Board {self.board_num}")
             return True
             
         except Exception as e:
-            print(f"Error initializing DAQ: {e}")
+            print(f"Error initializing MCC DAQ: {e}")
             self.available = False
             return False
     
     def send_pulse(self, value):
-        """Send a digital pulse with specified value"""
-        if not self.available or not self.task:
+        """Send a digital pulse with specified value (matching MATLAB exactly)"""
+        if not self.available:
             return False
         
         try:
-            # Convert value to 8-bit binary array
-            binary_value = [(value >> i) & 1 for i in range(8)]
+            # Send pulse (matching MATLAB: err=DaqDOut(dio,0,value))
+            ul.d_out(self.board_num, DigitalPortType.FIRSTPORTA, value)
             
-            # Write the value
-            self.task.write(binary_value)
-            
-            # Wait and reset
+            # Wait (matching MATLAB: WaitSecs(wait_reset))
             time.sleep(self.wait_reset)
-            self.task.write([0] * 8)  # Reset to 0
+            
+            # Reset (matching MATLAB: fff=DaqDOut(dio,0,value_reset))
+            ul.d_out(self.board_num, DigitalPortType.FIRSTPORTA, self.pulse_codes['value_reset'])
             
             return True
             
@@ -237,17 +235,25 @@ class PulseGenerator:
             return False
     
     def send_signature_pulses(self):
-        """Send experiment start signature (3 pulses)"""
+        """Send experiment start signature (3 pulses matching MATLAB exactly)"""
         if not self.available:
             return False
         
-        for _ in range(3):
-            self.send_pulse(self.pulse_codes['data_signature_on'])
-            time.sleep(0.05)
-            self.send_pulse(self.pulse_codes['data_signature_off'])
-            time.sleep(0.45)
-        
-        return True
+        try:
+            for _ in range(3):
+                # Send signature on pulse
+                ul.d_out(self.board_num, DigitalPortType.FIRSTPORTA, self.pulse_codes['data_signature_on'])
+                time.sleep(0.05)
+                
+                # Send signature off pulse
+                ul.d_out(self.board_num, DigitalPortType.FIRSTPORTA, self.pulse_codes['data_signature_off'])
+                time.sleep(0.45)
+            
+            return True
+            
+        except Exception as e:
+            print(f"Error sending signature pulses: {e}")
+            return False
     
     def test_pulses(self):
         """Test pulse generation - similar to test_pulses.m"""
@@ -268,15 +274,49 @@ class PulseGenerator:
         print("Pulse test completed")
         return True
     
+    def config_first_detected_device(self, board_num, dev_id_list=None):
+        """Adds the first available device to the UL.  If a types_list is specified,
+        the first available device in the types list will be add to the UL.
+
+        Parameters
+        ----------
+        board_num : int
+            The board number to assign to the board when configuring the device.
+
+        dev_id_list : list[int], optional
+            A list of product IDs used to filter the results. Default is None.
+            See UL documentation for device IDs.
+        """
+        ul.ignore_instacal()
+        devices = ul.get_daq_device_inventory(InterfaceType.ANY)
+        if not devices:
+            raise Exception('Error: No DAQ devices found')
+
+        print('Found', len(devices), 'DAQ device(s):')
+        for device in devices:
+            print('  ', device.product_name, ' (', device.unique_id, ') - ',
+                  'Device ID = ', device.product_id, sep='')
+
+        device = devices[0]
+        if dev_id_list:
+            device = next((device for device in devices
+                           if device.product_id in dev_id_list), None)
+            if not device:
+                err_str = 'Error: No DAQ device found in device ID list: '
+                err_str += ','.join(str(dev_id) for dev_id in dev_id_list)
+                raise Exception(err_str)
+
+        # Add the first DAQ device to the UL with the specified board number
+        ul.create_daq_device(board_num, device)
+    
     def cleanup(self):
         """Clean up DAQ resources"""
-        if self.task:
+        if self.available:
             try:
-                self.task.stop()
-                self.task.close()
+                # Reset digital port to 0
+                ul.d_out(self.board_num, DigitalPortType.FIRSTPORTA, 0)
             except:
                 pass
-            self.task = None
 
 class ScreeningTools:
     """Screening and calibration tools for the RSVP experiment"""
@@ -386,8 +426,8 @@ def create_hardware_manager(config):
     # Initialize pulse generator if requested
     if config.get('withpulses', False):
         pulse_gen = PulseGenerator(
-            device_name=config.get('daq_device', 'Dev1'),
-            port=config.get('daq_port', 'port0')
+            device_name=config.get('daq_device', None),
+            port=config.get('daq_port', 'FIRSTPORTA')
         )
         if pulse_gen.initialize():
             hardware['pulse_gen'] = pulse_gen

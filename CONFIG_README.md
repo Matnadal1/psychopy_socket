@@ -12,7 +12,7 @@ This document explains the configuration system for the RSVP experiment.
 - ✅ DAQ pulse generation enabled  
 - ✅ Hardware screening enabled
 - ✅ Fullscreen mode (1920x1080)
-- ✅ Extended sequences (5 sequences × 15 images)
+- ✅ Extended sequences (2 sequences × 15 images)
 
 ```json
 {
@@ -21,7 +21,7 @@ This document explains the configuration system for the RSVP experiment.
   "fullscreen": true,
   "window_resolution": [1920, 1080],
   "seq_length": 15,
-  "n_sequences": 5,
+  "n_sequences": 2,
   "enable_screening": true
 }
 ```
@@ -63,12 +63,10 @@ This document explains the configuration system for the RSVP experiment.
 | `fullscreen` | Fullscreen mode | `true` | `false` | `false` |
 | `isi` | Inter-stimulus interval (seconds) | `[1.0]` | `[1.0]` | `[1.0]` |
 | `seq_length` | Images per sequence | `15` | `10` | `10` |
-| `n_sequences` | Number of sequences | `5` | `3` | `3` |
+| `n_sequences` | Number of sequences | `2` | `3` | `1` |
 | `max_wait_response` | Response timeout (seconds) | `10.0` | `10.0` | `10.0` |
 | `min_blank_duration` | Minimum blank time | `1.25` | `1.25` | `1.25` |
 | `max_rand_blank` | Random blank variation | `0.5` | `0.5` | `0.5` |
-| `line_thickness` | Line width (pixels) | `5` | `5` | `5` |
-| `line_offset` | Line distance from image | `5` | `5` | `5` |
 | `daq_device` | DAQ device name | `"Dev1"` | `"Dev1"` | `"Dev1"` |
 | `daq_port` | DAQ port name | `"port0"` | `"port0"` | `"port0"` |
 | `enable_screening` | Hardware testing | `true` | `false` | `false` |
@@ -110,9 +108,9 @@ When you run the experiment, select the environment in the participant dialog:
 - Verify file permissions
 
 ### Hardware Issues
-- Run `python test_rsvp_hardware.py` to diagnose
 - Check device drivers (gamepad, DAQ)
-- Verify pygame and nidaqmx installation
+- Verify pygame and mcculw installation
+- See `MCC_DAQ_SETUP.md` for DAQ setup instructions
 
 ### Display Problems
 - Adjust `window_resolution` to match your monitor
@@ -133,14 +131,11 @@ When you run the experiment, select the environment in the participant dialog:
 ## File Management
 
 - ✅ Keep: `rsvp_config_hospital.json`, `rsvp_config_lab.json`, `rsvp_config.json`
-- ❌ Removed: `rsvp_config_basic.json`, `rsvp_config_advanced.json` (deprecated)
+- ✅ Essential: `rsvp_experiment.py`, `rsvp_hardware.py`, `launch_rsvp.py`
 
 ## Quick Reference
 
 ```bash
-# Setup
-python setup_rsvp.py
-
 # Hospital environment
 python launch_rsvp.py hospital
 
@@ -149,7 +144,4 @@ python launch_rsvp.py lab
 
 # Interactive selection
 python launch_rsvp.py
-
-# Test hardware
-python test_rsvp_hardware.py
 ```

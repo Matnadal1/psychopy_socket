@@ -168,21 +168,6 @@ experiment_data/
 *.mat
 *.txt
 
-# PsychoPy specific
-*.psydat
-*.log
-lastrun.py
-*.png
-*.jpg
-*.jpeg
-*.bmp
-*.gif
-*.tiff
-*.wav
-*.mp3
-*.mp4
-*.avi
-*.mov
 
 # Windows specific
 Thumbs.db
