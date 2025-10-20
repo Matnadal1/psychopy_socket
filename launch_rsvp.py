@@ -21,7 +21,7 @@ def display_environment_info():
     print("   • DAQ pulse generation for EEG")
     print("   • Hardware screening tests")
     print("   • Fullscreen mode (1920x1080)")
-    print("   • Extended sequences (5 sequences, 15 images each)")
+    print("   • Extended sequences (2 sequences, 15 images each)")
     print("   • Research-grade data collection")
     print()
     print("🔬 LAB ENVIRONMENT:")
@@ -123,7 +123,7 @@ def run_with_environment(environment):
     
     if not os.path.exists(config_file):
         print(f"Configuration file {config_file} not found!")
-        print("Please run setup_rsvp.py first.")
+        print("Please ensure the configuration files are present.")
         return False
     
     try:

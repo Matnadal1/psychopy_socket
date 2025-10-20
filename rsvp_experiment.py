@@ -58,7 +58,13 @@ class RSVPExperiment:
         
         # Load custom config if provided
         if config_file and os.path.exists(config_file):
+            print(f"Loading configuration from: {config_file}")
             self.load_config(config_file)
+            print(f"Configuration loaded successfully")
+            print(f"  - Sequences: {self.config.get('n_sequences', 'default')}")
+            print(f"  - Sequence length: {self.config.get('seq_length', 'default')}")
+            print(f"  - Device: {self.config.get('device_response', 'default')}")
+            print(f"  - Pulses: {self.config.get('withpulses', 'default')}")
         
         # Initialize experiment variables
         self.window = None
@@ -179,10 +185,9 @@ Appuyez sur BARRE D'ESPACE pour commencer.'''
         if dlg.OK:
             self.config['language'] = participant_info['Language'].lower()
             
-            # Configure based on environment if provided
+            # Add environment to participant info for logging (but don't reconfigure)
             if environment:
-                self.configure_environment(environment)
-                participant_info['Environment'] = environment  # Add to data for logging
+                participant_info['Environment'] = environment
             
             return participant_info
         else:
